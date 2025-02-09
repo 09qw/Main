@@ -1,0 +1,110 @@
+// Lightning.io - Multiplayer Game
+// Description: Players control lightning orbs, collect electricity, grow larger, and absorb smaller players.
+// Obstacles and dynamic mechanics included.
+
+const { Server } = require("socket.io");
+const express = require("express");
+const http = require("http");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+app.use(express.static("public")); // Serve static files
+
+let players = {}; // Store player data
+let electricityDots = []; // Electricity collectibles
+let obstacles = []; // Obstacles on the map
+
+// Game Constants
+const MAP_SIZE = 2000;
+const ELECTRICITY_COUNT = 100;
+const OBSTACLE_COUNT = 20;
+
+function spawnElectricity() {
+    while (electricityDots.length < ELECTRICITY_COUNT) {
+        electricityDots.push({
+            id: Math.random(),
+            x: Math.random() * MAP_SIZE,
+            y: Math.random() * MAP_SIZE,
+            value: Math.random() * 10 + 5
+        });
+    }
+}
+
+function spawnObstacles() {
+    for (let i = 0; i < OBSTACLE_COUNT; i++) {
+        obstacles.push({
+            x: Math.random() * MAP_SIZE,
+            y: Math.random() * MAP_SIZE,
+            size: Math.random() * 50 + 20
+        });
+    }
+}
+
+spawnElectricity();
+spawnObstacles();
+
+io.on("connection", (socket) => {
+    console.log("A player connected: ", socket.id);
+    
+    players[socket.id] = {
+        id: socket.id,
+        x: Math.random() * MAP_SIZE,
+        y: Math.random() * MAP_SIZE,
+        size: 20,
+        speed: 5,
+    };
+    
+    socket.emit("init", { players, electricityDots, obstacles });
+
+    socket.on("move", (data) => {
+        if (players[socket.id]) {
+            players[socket.id].x += data.dx * players[socket.id].speed;
+            players[socket.id].y += data.dy * players[socket.id].speed;
+            checkCollisions(socket.id);
+        }
+    });
+
+    socket.on("disconnect", () => {
+        console.log("A player disconnected: ", socket.id);
+        delete players[socket.id];
+    });
+});
+
+function checkCollisions(playerId) {
+    let player = players[playerId];
+    if (!player) return;
+    
+    // Check collision with electricity dots
+    electricityDots = electricityDots.filter(dot => {
+        let distance = Math.hypot(player.x - dot.x, player.y - dot.y);
+        if (distance < player.size) {
+            player.size += dot.value;
+            return false;
+        }
+        return true;
+    });
+    spawnElectricity();
+    
+    // Check collision with players
+    for (let id in players) {
+        if (id !== playerId) {
+            let other = players[id];
+            let distance = Math.hypot(player.x - other.x, player.y - other.y);
+            if (distance < player.size && player.size > other.size + 5) {
+                player.size += other.size * 0.8;
+                delete players[id];
+                io.to(id).emit("eliminated");
+            }
+        }
+    }
+}
+
+setInterval(() => {
+    io.emit("update", { players, electricityDots });
+}, 50);
+
+server.listen(3000, () => {
+    console.log("Lightning.io server running on port 3000");
+});
